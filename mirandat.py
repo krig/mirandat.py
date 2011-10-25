@@ -240,7 +240,6 @@ class DBContact(object):
         else:
             self.name = "?"
 
-        print "Contact info:", ", ".join("%s=%s"%(k,v) for k,v in self.settings.iteritems())
         self.events = self._read_events(dat)
 
         # find contact name/id etc!
@@ -264,6 +263,14 @@ class DBContact(object):
             events.append(e)
         return events
 
+    def __str__(self):
+        s = "Contact:\n"
+        s += "Event count: " + str(self.eventCount) + "\n"
+        for k,v in self.settings.iteritems():
+            s += ("%12s:\t%12s\n"%(str(k), str(v)))
+        return s
+
+
 class DBHeader(object):
     def __init__(self, dat):
         header_size = 20+(6*4)
@@ -278,21 +285,107 @@ class DBHeader(object):
         self.user = header[7]
         self.firstModuleName = header[8]
 
-def main():
-    dat = None
-    with open(sys.argv[1]) as f:
-        dat = f.read()
+def sqlite3_export(header, dat):
+    import sqlite3
 
-    header = DBHeader(dat)
-    #print "Num Contacts:", header.contactCount
+    con = sqlite3.connect("export.db3")
+
+    cur = con.cursor()
+
+    cur.executescript("""
+        create table contacts(
+            id integer primary key autoincrement,
+            name text
+        );
+
+        create table settings(
+            id integer primary key autoincrement,
+            owner integer,
+            name text,
+            value text
+        );
+
+        create table events(
+            id integer primary key autoincrement,
+            owner integer,
+            timestamp integer,
+            type text,
+            data text
+        );
+        """)
+
+    cur.execute("create table test(x)")
+    #cur.executemany("insert into test(x) values (?)", [("a",), ("b",)])
+    #cur.execute("select x from test order by x collate reverse")
 
     next_contact = header.firstContact
     while next_contact != 0:
         c = DBContact(dat, next_contact)
-        for e in c.events:
-            print e
-
+        cur.execute("insert into contacts(name) values (?)", (unicode(str(c.name), 'utf-8'),));
+        c_id = None
+        for row in cur.execute('select last_insert_rowid()'):
+            print row
+            c_id = row[0]
+        cur.executemany("insert into settings(owner, name, value) values (?, ?, ?)",
+                        [(c_id, unicode(k, 'utf-8'), unicode(str(v), 'utf-8')) for k, v in c.settings.iteritems()])
+        cur.executemany("insert into events(owner, timestamp, type, data) values (?, ?, ?, ?)",
+                        [(c_id, e.timestamp, unicode(e.typestr(), 'utf-8'), unicode(e.parse_blob(), 'utf-8')) for e in c.events])
         next_contact = c.next
+
+    con.commit()
+    cur.close()
+    con.close()
+
+from optparse import OptionParser
+
+def main():
+    parser = OptionParser()
+    parser.add_option("-f", "--file", dest="filename",
+                      help="miranda database file", metavar="FILE")
+
+    (options, args) = parser.parse_args()
+
+    if len(args) == 0 or options.filename is None:
+        print "Missing arguments."
+        return
+
+    dat = None
+    with open(options.filename) as f:
+        dat = f.read()
+    header = DBHeader(dat)
+
+    if args[0] == "contactnames":
+        next_contact = header.firstContact
+        while next_contact != 0:
+            c = DBContact(dat, next_contact)
+            print "%12s\t%12s\t%12s\t%12s"%(c.uin, c.nick, c.firstName, c.lastName)
+            next_contact = c.next
+    elif args[0] == "find_contact":
+        by = args[1]
+        val = args[2]
+        next_contact = header.firstContact
+        while next_contact != 0:
+            c = DBContact(dat, next_contact)
+            if str(c.settings.get(by)) == val:
+                print c
+            next_contact = c.next
+    elif args[0] == "contacts":
+        next_contact = header.firstContact
+        while next_contact != 0:
+            c = DBContact(dat, next_contact)
+            print c
+            next_contact = c.next
+    elif args[0] == "ls":
+        next_contact = header.firstContact
+        while next_contact != 0:
+            c = DBContact(dat, next_contact)
+            for e in c.events:
+                print e
+            next_contact = c.next
+    elif args[0] == "export":
+        sqlite3_export(header, dat)
+    else:
+        print "Unknown command"
 
 if __name__=="__main__":
     main()
