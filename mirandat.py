@@ -350,7 +350,7 @@ def main():
         return
 
     dat = None
-    with open(options.filename) as f:
+    with open(options.filename, 'rb') as f:
         dat = f.read()
     header = DBHeader(dat)
 
